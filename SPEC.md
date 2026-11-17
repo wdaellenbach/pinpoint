@@ -117,6 +117,7 @@ The admin has the widget built in. The public site loads `notes-widget.js` (no f
 - **While it's capturing**, the preview shimmers and shows a spinner with "Capturing…". If the person sends early, the box says "Capturing… the note goes as soon as it's ready" and the note sends once the screenshot is done.
 - **Preview:** from the same capture, also make a small copy (≤ 640 px wide, JPEG, ≤ ~120 KB as a data URL) and send it with the note as `shot_preview`. It's stored inline with the note so an AI that can read the database but can't reach the full image still sees it (§6.6).
 - If capture fails, the note still saves, marked "No screenshot". Sending never fails because of the screenshot.
+- **Scrolled pages:** DOM-to-image libraries size their copy of the page to the capture box. When you capture the viewport by shifting the copy up by the scroll offset, make the copy at least `scrollY + viewport height` tall first, or anything more than a screen down comes out blank. Paint the background colour behind the capture rather than passing it to the library (with modern-screenshot that option also blanked deep captures). Acceptance test 17.
 - **Only what's on screen:** off-screen images can be swapped for same-sized blanks in the copy, and slow resources given a short timeout (≈ 2.5 s), so capture stays at a few seconds. Cap the whole capture (≈ 10 s); past that the note saves without a screenshot.
 - After sending: a "Note sent" toast, and the badge count updates.
 - **Phones (≤ 767 px):** the note box is pinned to the **top** of the screen, full width with an 8 px margin (below the safe area), so the on-screen keyboard opening below never covers it. Fields and buttons are 16 px so iOS doesn't zoom, the screenshot preview is shorter (80 px), and Send is full width with the "Enter to send" hint under it. The notes panel (§4.5) is pinned to the top the same way.
@@ -384,6 +385,7 @@ Automate these as unit tests for the token and the feed formatter, plus an end-t
 14. A new note with a screenshot also stores `shot_preview` (≤ 640 px wide, ≤ ~120 KB). `.json?inline=1` includes it; plain `.json` and the Markdown feed don't.
 15. With only database access: the link derived from `pinpoint_secret` and `pinpoint_feed_version` with the helper returns 200, and its `/shot/<id>` returns the image without a session.
 16. Moving the secret into the settings table keeps links made before the move working.
+17. A note made with the page scrolled several screens down gets a screenshot of what was on screen, not a blank image.
 
 ---
 

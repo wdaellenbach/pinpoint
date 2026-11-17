@@ -14,6 +14,8 @@ Newest first. Versions follow the line at the top of SPEC.md.
   access can derive the link with a small helper and open `/shot/<id>` without signing in. Copy an existing secret when
   moving it, so old links keep working.
 - **Capture speed** (§4.4): only on-screen images are fetched, short per-resource timeout, ~10 s overall cap.
+- **Scrolled pages** (§4.4): make the page copy tall enough before shifting it; paint the background behind it. Blank screenshots
+  far down a page were the symptom. Acceptance test 17.
 - Object storage for full screenshots is now core (was 🔜). Acceptance tests 14–16 added. Build: canadianbrass-web 836f2a2.
 
 ## 1.1 — 2026-11-17
