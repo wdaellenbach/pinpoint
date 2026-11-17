@@ -2,6 +2,20 @@
 
 Newest first. Versions follow the line at the top of SPEC.md.
 
+## 1.2 — 2026-11-17
+- **Screenshots for AI tools** (§6.6, new): a table of how each kind of AI tool sees a note's screenshot (connector, browser,
+  shell, database only, text-only fetch), and the rule that every screenshot is reachable at least one of those ways.
+  Prompted by a "check the notes" run (Canadian Brass site) where the AI could read the notes from the database but
+  couldn't see any screenshot: the full images were in the bucket, the admin route needed a session, and the feed
+  secret sat in a KV store its tools couldn't read.
+- **Inline preview** (§4.4, §5): each note also stores `shot_preview`, a ≤ 640 px JPEG data URL (≤ ~120 KB), next to the
+  full screenshot in object storage. `.json?inline=1` carries it (§6.1).
+- **Feed secret in the settings table** (§6.2): `PINPOINT_SECRET || settings.pinpoint_secret`, so a session with database
+  access can derive the link with a small helper and open `/shot/<id>` without signing in. Copy an existing secret when
+  moving it, so old links keep working.
+- **Capture speed** (§4.4): only on-screen images are fetched, short per-resource timeout, ~10 s overall cap.
+- Object storage for full screenshots is now core (was 🔜). Acceptance tests 14–16 added. Build: canadianbrass-web 836f2a2.
+
 ## 1.1 — 2026-11-17
 - Spec made project-neutral: example data on example.com, reference table `pinpoint_notes`, generic CSRF header.
 - Renamed from "Notes for Claude" to **Pinpoint AI**; vendor-neutral wording ("the AI").

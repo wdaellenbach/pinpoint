@@ -15,7 +15,7 @@ one-line resolution.
 
 | | |
 |---|---|
-| Spec version | 1.1 · 2026-11-17 |
+| Spec version | 1.2 · 2026-11-17 |
 | Markers in the spec | 🔜 planned extension (not core yet) |
 
 ## How to use this repo

@@ -2,7 +2,7 @@
 
 **Pin feedback on any element of a site. An AI picks it up, fixes it, and marks it done.**
 
-**Version:** 1.1 · 2026-11-17 (formerly "Claude Notes" / "Notes for Claude")
+**Version:** 1.2 · 2026-11-17 (formerly "Claude Notes" / "Notes for Claude")
 **Markers:** 🔜 marks planned extensions that aren't part of the core yet. Everything else is core.
 **Audience:** anyone adding Pinpoint AI to a web project — the people building it and the AI sessions that will read the notes.
 
@@ -115,7 +115,9 @@ The admin has the widget built in. The public site loads `notes-widget.js` (no f
 - A popover next to the selection, which can be dragged by its header. It holds a screenshot preview and a textarea. **Enter** sends, **Shift+Enter** adds a new line, **Esc** cancels. Placeholder: "Note for the AI… Enter to send, Shift+Enter for a new line".
 - **Screenshot:** made in the browser with a DOM-to-image library from the visible viewport, with the target outlined.
 - **While it's capturing**, the preview shimmers and shows a spinner with "Capturing…". If the person sends early, the box says "Capturing… the note goes as soon as it's ready" and the note sends once the screenshot is done.
+- **Preview:** from the same capture, also make a small copy (≤ 640 px wide, JPEG, ≤ ~120 KB as a data URL) and send it with the note as `shot_preview`. It's stored inline with the note so an AI that can read the database but can't reach the full image still sees it (§6.6).
 - If capture fails, the note still saves, marked "No screenshot". Sending never fails because of the screenshot.
+- **Only what's on screen:** off-screen images can be swapped for same-sized blanks in the copy, and slow resources given a short timeout (≈ 2.5 s), so capture stays at a few seconds. Cap the whole capture (≈ 10 s); past that the note saves without a screenshot.
 - After sending: a "Note sent" toast, and the badge count updates.
 - **Phones (≤ 767 px):** the note box is pinned to the **top** of the screen, full width with an 8 px margin (below the safe area), so the on-screen keyboard opening below never covers it. Fields and buttons are 16 px so iOS doesn't zoom, the screenshot preview is shorter (80 px), and Send is full width with the "Enter to send" hint under it. The notes panel (§4.5) is pinned to the top the same way.
 - 🔜 **Redaction:** mask `input[type=password]`, `[data-private]` and the feed-link field before capture.
@@ -148,7 +150,8 @@ CREATE TABLE pinpoint_notes (
   screen          TEXT,                          -- human screen name
   target          TEXT,                          -- JSON, see §4.3 (≤ 8 KB)
   note            TEXT NOT NULL,                 -- ≤ 4,000 chars
-  shot            TEXT,                          -- data:image/(png|jpeg|webp);base64,… (≤ ~1 MB) or NULL
+  shot            TEXT,                          -- data:image/(png|jpeg|webp);base64,… (≤ ~1 MB) or NULL (or shot_key, below)
+  shot_preview    TEXT,                          -- small inline copy: data:image/jpeg;base64,… (≤ 640 px wide, ≤ ~120 KB) or NULL
   created_by      TEXT,                          -- author's display name
   created_by_id   INTEGER,                       -- users.id
   created_by_role TEXT,                          -- superadmin | admin | editor
@@ -164,12 +167,13 @@ CREATE INDEX pinpoint_notes_status ON pinpoint_notes(status, id);
 Settings keys (key/value table):
 - `pinpoint_feed_version`: an integer, bumped by **New link now**.
 - `pinpoint_rules`: custom rules text. Empty means the default rules.
+- `pinpoint_secret`: the feed's HMAC secret, generated once when no `PINPOINT_SECRET` environment secret is set (§6.2).
 
 Status changes:
 - `open` → `done` (fixed) or `wontfix` (deliberately left as is, with the reason in `resolution`).
 - **Reopen** returns the note to `open` and clears `done_at`, `done_by`, `resolution` and `commit_sha`.
 
-**For new builds** 🔜: store screenshots in object storage (R2/S3) under a `shot_key` instead of inline. Inline images bloat backups and the list queries. Delete the screenshots of notes that have been closed for more than 180 days.
+**For new builds:** store the full screenshot in object storage (R2/S3) under a `shot_key` instead of inline; inline full-size images bloat backups and the list queries. Keep `shot_preview` inline: it's small, and it's the one copy an AI with database access can always read. List queries select `shot_preview IS NOT NULL` rather than the column itself. 🔜 Delete the screenshots of notes that have been closed for more than 180 days.
 
 ---
 
@@ -184,6 +188,9 @@ https://<site>/pinpoint/<token>.json        → same data as JSON
 https://<site>/pinpoint/<token>/shot/<id>   → a note's screenshot
 ```
 Query parameters: `?status=open|done|all` (default `open`; `done` also includes `wontfix`), `?since=YYYY-MM-DD`, `?id=351,352`.
+JSON only: `?inline=1` adds `screenshot_preview` (the data URL from §4.4) to each note, for tools that can read text but can't open an image URL (§6.6).
+
+Screenshot URLs carry the token, so they open **without a session**: in a browser tool, with `curl`, or in any fetch tool that can handle images.
 
 ### 6.2 Token and rotation
 The tokens are stateless, so rotation needs no scheduled job:
@@ -191,8 +198,11 @@ The tokens are stateless, so rotation needs no scheduled job:
 ```
 period = floor(unix_days / 30)
 token  = base64url( HMAC-SHA256( secret, "pinpoint:" + version + ":" + period ) )[0..32]
-secret = PINPOINT_SECRET || SESSION_SECRET
+secret = PINPOINT_SECRET || settings.pinpoint_secret   (generated once, 32+ random bytes)
 ```
+- Keep the generated secret **in the settings table, next to the notes**, not in a separate store such as a KV namespace. An AI session that can query the database (for example through a hosting provider's MCP connector) can then derive the current link itself and open the screenshots, without the admin being signed in. Anyone who can read the database can already read every note, so this exposes nothing new. A project that wants the link to stay secret even from database readers sets `PINPOINT_SECRET` as an environment secret instead.
+- When moving an existing secret into the settings table, copy the old value so links already handed out keep working.
+- Ship a tiny helper with the project (e.g. `tools/pinpoint-link.mjs <secret> <version> <origin>`) that prints the current link from those two settings, so the AI doesn't reimplement the HMAC by hand.
 - **Accepted tokens:** the current period's token, plus the previous period's token for the **first 3 days** after a rotation. A link copied the night before a rotation still works the next morning, and no link lives more than 33 days.
 - **New link now** bumps `version`. Every earlier link stops working immediately.
 - Tokens are compared in constant time.
@@ -252,6 +262,21 @@ X-Frame-Options: DENY
 - **Claude Code / scripts:** `curl -s "$PINPOINT_URL.json"`, then download the screenshots and open them. Keep the link in an untracked `.env.local`, never in the repo.
 - **Read-only:** the feed never changes anything. Notes are closed through MCP or the admin.
 
+### 6.6 Screenshots for AI tools
+An AI can only fix "this looks wrong" if it can see what the person saw. Tools differ in what they can open, so every note's screenshot has to be reachable at least one of these ways. Build all of them; they're cheap.
+
+| The AI has… | How it sees a screenshot |
+|---|---|
+| The MCP connector | `get_note` returns the screenshot as image content (§7.2) |
+| A browser tool (navigate + screenshot) | Opens `/pinpoint/<token>/shot/<id>`. No sign-in needed, since the token is the authentication |
+| A shell / code tools | `curl -s "$LINK/shot/<id>" -o shot.jpg`, then views the file |
+| Database access only (e.g. a D1/Postgres connector) | Reads `shot_preview` and decodes the data URL to a file. Or derives the link from `pinpoint_secret` + `pinpoint_feed_version` (§6.2) and uses one of the rows above |
+| A text-only fetch tool (web fetch that converts pages to text) | Can't see images. It reads the note, label, selector and text from the feed, and asks for a browser tool, the connector or the database when the note depends on how something looked. `.json?inline=1` helps only if the tool returns raw text to code that can decode it |
+
+- Never put the full-size image inline in the feed; `?inline=1` carries only the small preview.
+- The admin's own screenshot route (`/admin/api/notes/:id/shot`) needs a session, so it's for the admin page, not for AI tools.
+- If the AI can't see a screenshot that matters, it says so and asks; it doesn't guess from the text alone.
+
 ---
 
 ## 7. Channel B: MCP
@@ -283,7 +308,8 @@ Put this in the project's `CLAUDE.md` / `AGENTS.md`, or in a Claude Project's in
 ## Pinpoint AI
 When asked to "check the notes":
 1. Load all open notes: MCP `list_notes`, or the Pinpoint link (project instructions / .env.local).
-2. Open each note's screenshot when the wording depends on what it looked like (`get_note`).
+2. Look at each note's screenshot when the wording depends on what it looked like: `get_note`, the feed's
+   `/shot/<id>` link in a browser tool, or `shot_preview` from the database (§6.6). If none is available, say so.
 3. Read all notes together before editing. Group by screen; look for notes that chain,
    duplicate or contradict each other.
 4. If anything is unclear or conflicting, stop and ask, listing the note ids and the question.
@@ -321,7 +347,7 @@ All write routes need the admin session plus a CSRF header (e.g. `x-pinpoint: 1`
 | `GET` | `/admin/api/notes/feed` | superadmin | `{ url, rotates_at, works_until, period_days, grace_days, version }` |
 | `POST` | `/admin/api/notes/feed/rotate` | superadmin | New link now. Send a JSON body (`{}`) |
 | `GET` / `PUT` | `/admin/api/notes/rules` | superadmin | Read (`{ rules, default }`) or save the custom rules |
-| `GET` | `/pinpoint/:token[.json]` | feed token | Feed |
+| `GET` | `/pinpoint/:token[.json][?inline=1]` | feed token | Feed (`inline=1`: JSON with previews) |
 | `GET` | `/pinpoint/:token/shot/:id` | feed token | Screenshot |
 
 ---
@@ -333,7 +359,8 @@ All write routes need the admin session plus a CSRF header (e.g. `x-pinpoint: 1`
 - [x] MCP: OAuth, per-user role check (superadmin), revocable. The only write is note status and resolution.
 - [x] Note text is escaped in the feed (quoted, no headings) and rendered as text in the admin.
 - [x] The feed rules and CLAUDE.md both carry the trust rules.
-- [ ] 🔜 Screenshot redaction (passwords, `[data-private]`, the feed-link field).
+- [x] Screenshot URLs need the token; the admin screenshot route needs a session. The inline preview is only in the database and in `?inline=1`.
+- [ ] 🔜 Screenshot redaction (passwords, `[data-private]`, the feed-link field), applied to the preview too.
 - [ ] 🔜 Rate limiting and token-free access logs on `/pinpoint/*`.
 
 ---
@@ -354,6 +381,9 @@ Automate these as unit tests for the token and the feed formatter, plus an end-t
 11. MCP `get_note` returns image content. `resolve_notes` sets the status, resolution and `done_by`, and requires a resolution for done/wontfix. Non-superadmins can't call it.
 12. Closed notes show their resolution in the admin. **Reopen** clears it.
 13. On a phone (≤ 767 px), the note box and the notes panel sit at the top of the screen; with the keyboard open the textarea and Send stay visible, and focusing the textarea doesn't zoom the page.
+14. A new note with a screenshot also stores `shot_preview` (≤ 640 px wide, ≤ ~120 KB). `.json?inline=1` includes it; plain `.json` and the Markdown feed don't.
+15. With only database access: the link derived from `pinpoint_secret` and `pinpoint_feed_version` with the helper returns 200, and its `/shot/<id>` returns the image without a session.
+16. Moving the secret into the settings table keeps links made before the move working.
 
 ---
 
